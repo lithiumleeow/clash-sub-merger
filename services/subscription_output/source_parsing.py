@@ -96,15 +96,13 @@ def apply_template_proxy_groups(
                 if name == "{{ALL_PROXIES}}":
                     references.extend(all_proxy_names)
                 elif name == "{{COUNTRY_GROUPS}}":
-                    references.extend(
-                        country for country in country_groups if country != group["name"]
-                    )
+                    references.extend(country for country in country_groups if country != group["name"])
                 elif name in valid_names:
                     references.append(name)
 
-            uses_dynamic_nodes = any(group.get(key) for key in (
-                "use", "include-all", "include-all-proxies", "include-all-providers",
-            ))
+            uses_dynamic_nodes = any(
+                group.get(key) for key in ("use", "include-all", "include-all-proxies", "include-all-providers")
+            )
             if not references and not uses_dynamic_nodes:
                 references = all_proxy_names or ["DIRECT"]
             if references or "proxies" in group:

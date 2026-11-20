@@ -10,7 +10,6 @@ import time
 from typing import Dict, List, Optional
 
 import yaml
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
@@ -45,7 +44,8 @@ def _parse_clash_template(content: str) -> tuple[str, str, list]:
 
     groups = parsed.pop("proxy-groups", [])
     if not isinstance(groups, list) or any(
-        not isinstance(group, dict) or not isinstance(group.get("name"), str)
+        not isinstance(group, dict)
+        or not isinstance(group.get("name"), str)
         or not isinstance(group.get("proxies", []), list)
         or any(not isinstance(name, str) for name in group.get("proxies", []))
         for group in groups

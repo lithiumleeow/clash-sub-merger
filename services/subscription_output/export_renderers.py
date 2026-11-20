@@ -378,7 +378,9 @@ def render_clash_response(
                 existing_listeners = header_config.pop("listeners")
                 existing_names = {item.get("name") for item in existing_listeners if isinstance(item, dict)}
                 listeners = existing_listeners + [item for item in listeners if item["name"] not in existing_names]
-                output_parts = [serialized_name, yaml.safe_dump(header_config, allow_unicode=True, sort_keys=False).rstrip()] if header_config else [serialized_name]
+                output_parts = [serialized_name]
+                if header_config:
+                    output_parts.append(yaml.safe_dump(header_config, allow_unicode=True, sort_keys=False).rstrip())
             output_parts.append(yaml.safe_dump({"listeners": listeners}, allow_unicode=True, sort_keys=False).rstrip())
 
     output_parts.append("\nproxies:" if proxies else "\nproxies: []")
