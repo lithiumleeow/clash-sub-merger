@@ -5,8 +5,11 @@ Template management endpoints
 
 import json
 import os
+import re
 import time
 from typing import Dict, List, Optional
+
+import yaml
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
@@ -26,27 +29,39 @@ YAML_SOURCE_DIR = AppConfig.YAML_SOURCE_DIR
 OUTPUT_FILE = os.path.join(AppConfig.DATA_DIR, "myconfig.yaml")
 
 
-def _split_template_content(content: str) -> tuple[str, str]:
-    """Split a full YAML template while keeping rules and trailing sections intact."""
-    lines = content.strip().splitlines()
-    proxy_groups_index = next(
-        (index for index, line in enumerate(lines) if line.strip().startswith("proxy-groups:")),
-        None,
+def _parse_clash_template(content: str) -> tuple[str, str, list]:
+    """Separate generated fields from an imported standalone Clash configuration."""
+    content = re.sub(
+        r"(?m)^(\s*-\s*)(\{\{(?:ALL_PROXIES|COUNTRY_GROUPS)\}\})(?=\s*(?:#|$))",
+        r'\1"\2"',
+        content,
     )
-    rules_index = next(
-        (index for index, line in enumerate(lines) if line.strip().startswith("rules:")),
-        None,
-    )
-    split_index = rules_index if rules_index is not None else proxy_groups_index
-    if split_index is None:
-        return content.strip(), ""
-    return "\n".join(lines[:split_index]).strip(), "\n".join(lines[split_index:]).strip()
+    try:
+        parsed = yaml.safe_load(content)
+    except yaml.YAMLError:
+        raise HTTPException(status_code=400, detail="模板须为有效的 Clash/Mihomo YAML 配置") from None
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail="模板须为 Clash/Mihomo YAML 配置对象")
+
+    groups = parsed.pop("proxy-groups", [])
+    if not isinstance(groups, list) or any(
+        not isinstance(group, dict) or not isinstance(group.get("name"), str)
+        or not isinstance(group.get("proxies", []), list)
+        or any(not isinstance(name, str) for name in group.get("proxies", []))
+        for group in groups
+    ):
+        raise HTTPException(status_code=400, detail="proxy-groups 须为包含有效名称和节点列表的策略组列表")
+
+    parsed.pop("proxies", None)
+    parsed.pop("name", None)
+    rules = {"rules": parsed.pop("rules")} if "rules" in parsed else {}
+    header = yaml.safe_dump(parsed, allow_unicode=True, sort_keys=False).rstrip() if parsed else ""
+    suffix = yaml.safe_dump(rules, allow_unicode=True, sort_keys=False).rstrip() if rules else ""
+    return header, suffix, [{**group, "_imported_clash_group": True} for group in groups]
 
 
 def _template_content(template: dict) -> str:
     """Render a template record without hand-built YAML indentation."""
-    import yaml
-
     parts = []
     if template.get("header"):
         parts.append(str(template["header"]).rstrip())
@@ -54,7 +69,10 @@ def _template_content(template: dict) -> str:
     if isinstance(groups, list) and groups:
         parts.append(
             yaml.safe_dump(
-                {"proxy-groups": groups},
+                {"proxy-groups": [
+                    {key: value for key, value in group.items() if key != "_imported_clash_group"}
+                    for group in groups
+                ]},
                 allow_unicode=True,
                 sort_keys=False,
             ).rstrip()
@@ -216,16 +234,7 @@ def create_template(data: CreateTemplate, _: bool = Depends(verify_session)):
     suffix = data.suffix
     proxy_groups = data.proxy_groups
     if data.content is not None:
-        import yaml
-
-        try:
-            parsed = yaml.safe_load(data.content)
-        except yaml.YAMLError as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid YAML: {exc}") from None
-        if not isinstance(parsed, dict):
-            raise HTTPException(status_code=400, detail="Template content must be a YAML object")
-        proxy_groups = parsed.get("proxy-groups", proxy_groups or [])
-        header, suffix = _split_template_content(data.content)
+        header, suffix, proxy_groups = _parse_clash_template(data.content)
 
     def add_template(config: dict) -> dict:
         template_id = generate_timestamp_id("tpl_")
@@ -249,59 +258,8 @@ def create_template(data: CreateTemplate, _: bool = Depends(verify_session)):
 @handle_api_errors
 def update_template(template_id: str, data: UpdateTemplate, _: bool = Depends(verify_session)):
     """Update a template"""
-    # Handle legacy content format
     if data.content is not None:
-        # Split content into header, proxy_groups, and suffix
-        import yaml
-
-        try:
-            from yaml import CSafeLoader as YAMLLoader
-        except ImportError:
-            from yaml import SafeLoader as YAMLLoader
-
-        try:
-            parsed = yaml.load(data.content, Loader=YAMLLoader)
-            if isinstance(parsed, dict):
-                # Extract proxy-groups if present
-                proxy_groups = parsed.get("proxy-groups", [])
-
-                # Remove proxy-groups from parsed to get header
-                if "proxy-groups" in parsed:
-                    del parsed["proxy-groups"]
-
-                # Find where rules start (this becomes suffix)
-                content_lines = data.content.split("\n")
-                rules_index = -1
-                for i, line in enumerate(content_lines):
-                    if line.strip().startswith("rules:"):
-                        rules_index = i
-                        break
-
-                if rules_index >= 0:
-                    header = "\n".join(content_lines[:rules_index]).strip()
-                    suffix = "\n".join(content_lines[rules_index:]).strip()
-                else:
-                    # No rules section, treat everything before proxy-groups as header
-                    pg_index = -1
-                    for i, line in enumerate(content_lines):
-                        if line.strip().startswith("proxy-groups:"):
-                            pg_index = i
-                            break
-                    if pg_index >= 0:
-                        header = "\n".join(content_lines[:pg_index]).strip()
-                        suffix = ""
-                    else:
-                        header = data.content.strip()
-                        suffix = ""
-
-                data.header = header
-                data.suffix = suffix
-                data.proxy_groups = proxy_groups
-        except Exception:
-            # If parsing fails, treat as plain header
-            data.header = data.content
-            data.suffix = ""
-            data.proxy_groups = []
+        data.header, data.suffix, data.proxy_groups = _parse_clash_template(data.content)
 
     def apply_template_update(config: dict) -> dict:
         if template_id == "builtin":

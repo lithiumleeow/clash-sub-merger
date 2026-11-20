@@ -370,16 +370,23 @@ def render_clash_response(
                 listeners.append(listener)
 
         if listeners:
-            output_parts.append("\nlisteners:")
-            for listener in listeners:
-                output_parts.append(f"  - {json.dumps(listener, ensure_ascii=False, separators=(',', ':'))}")
+            try:
+                header_config = yaml.load(header, Loader=YAMLLoader)
+            except yaml.YAMLError:
+                header_config = None
+            if isinstance(header_config, dict) and isinstance(header_config.get("listeners"), list):
+                existing_listeners = header_config.pop("listeners")
+                existing_names = {item.get("name") for item in existing_listeners if isinstance(item, dict)}
+                listeners = existing_listeners + [item for item in listeners if item["name"] not in existing_names]
+                output_parts = [serialized_name, yaml.safe_dump(header_config, allow_unicode=True, sort_keys=False).rstrip()] if header_config else [serialized_name]
+            output_parts.append(yaml.safe_dump({"listeners": listeners}, allow_unicode=True, sort_keys=False).rstrip())
 
-    output_parts.append("\nproxies:")
+    output_parts.append("\nproxies:" if proxies else "\nproxies: []")
     for proxy in proxies:
         output_parts.append(
             f"  - {json.dumps(filter_underscore_fields(proxy), ensure_ascii=False, separators=(',', ':'))}"
         )
-    output_parts.append("\nproxy-groups:")
+    output_parts.append("\nproxy-groups:" if proxy_groups else "\nproxy-groups: []")
     for group in proxy_groups:
         output_parts.append(f"  - {json.dumps(group, ensure_ascii=False, separators=(',', ':'))}")
 

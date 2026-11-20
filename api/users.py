@@ -133,8 +133,21 @@ def list_users(_: bool = Depends(verify_session)):
     """List all users"""
     config = load_config()
     users = config.get("users", [])
-    # Mask tokens in list view
-    return {"users": [{**u, "token": u["token"][:8] + "..."} for u in users]}
+    subscriptions = {sub["id"]: sub for sub in config.get("subscriptions", [])}
+    return {
+        "users": [
+            {
+                **user,
+                "token": user["token"][:8] + "...",
+                "subscription_sources": [
+                    {"id": source_id, "name": subscriptions[source_id]["name"]}
+                    for source_id, nodes in (user.get("allocations") or {}).items()
+                    if nodes and source_id in subscriptions
+                ],
+            }
+            for user in users
+        ]
+    }
 
 
 @router.get("/{user_id}")

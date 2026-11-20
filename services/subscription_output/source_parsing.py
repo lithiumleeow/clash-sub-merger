@@ -8,6 +8,7 @@ and regenerate/override the proxy groups accordingly.
 from typing import Callable, Optional
 
 from services.config_merger import ProxyGroupGenerator
+from services.country_grouper import CountryGrouper
 
 from .pool_assembly import is_allocated_proxy
 
@@ -72,7 +73,13 @@ def apply_template_proxy_groups(
         group.get("name") for group in template_proxy_groups if isinstance(group, dict) and group.get("name")
     }
 
-    # Process each group
+    country_groups = {}
+    if any(
+        group.get("_imported_clash_group") and "{{COUNTRY_GROUPS}}" in group.get("proxies", [])
+        for group in template_proxy_groups
+    ):
+        country_groups = CountryGrouper.group_by_country(proxies)
+
     custom_groups = []
     for group in template_proxy_groups:
         new_group = dict(group)
@@ -80,17 +87,39 @@ def apply_template_proxy_groups(
         # Remove underscore fields
         new_group = filter_underscore_fields(new_group)
 
-        # Build the template defaults first. Saved selections are
-        # applied after proxy chains exist, so chain IDs can resolve
-        # to the exact names emitted for this template.
         original_proxies = group.get("proxies", [])
-        new_proxies = [
-            item for item in original_proxies if item in ["DIRECT", "REJECT"] or item in template_group_names
-        ]
-        new_proxies.extend(all_proxy_names)
-        seen = set()
-        new_group["proxies"] = [item for item in new_proxies if not (item in seen or seen.add(item))]
+        if group.get("_imported_clash_group"):
+            builtins = {"DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE"}
+            valid_names = builtins | template_group_names | set(all_proxy_names)
+            references = []
+            for name in original_proxies:
+                if name == "{{ALL_PROXIES}}":
+                    references.extend(all_proxy_names)
+                elif name == "{{COUNTRY_GROUPS}}":
+                    references.extend(
+                        country for country in country_groups if country != group["name"]
+                    )
+                elif name in valid_names:
+                    references.append(name)
+
+            uses_dynamic_nodes = any(group.get(key) for key in (
+                "use", "include-all", "include-all-proxies", "include-all-providers",
+            ))
+            if not references and not uses_dynamic_nodes:
+                references = all_proxy_names or ["DIRECT"]
+            if references or "proxies" in group:
+                new_group["proxies"] = list(dict.fromkeys(references))
+        else:
+            references = [
+                item for item in original_proxies if item in ["DIRECT", "REJECT"] or item in template_group_names
+            ]
+            new_group["proxies"] = list(dict.fromkeys(references + all_proxy_names))
 
         custom_groups.append(new_group)
 
+    custom_groups.extend(
+        {"name": country, "type": "select", "proxies": nodes}
+        for country, nodes in country_groups.items()
+        if nodes and country not in template_group_names
+    )
     return custom_groups

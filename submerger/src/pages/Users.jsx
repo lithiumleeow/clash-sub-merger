@@ -7,10 +7,17 @@ import { SkeletonHeader, SkeletonCardGrid } from '../components/Skeleton';
 
 const API_BASE = '/api';
 
+function toLocalDateTime(timestamp) {
+  if (!timestamp) return '';
+  const date = new Date(timestamp * 1000);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
 // User Settings Modal - for editing template and other settings
 const UserSettingsModal = ({ user, onClose, showToast, onSuccess }) => {
   const [templates, setTemplates] = useState([]);
   const [selectedTemplate, setSelectedTemplate] = useState(user.template_id || 'builtin');
+  const [expiry, setExpiry] = useState(toLocalDateTime(user.expire_time));
   const [subName, setSubName] = useState(user.sub_name || '');
   const [subFilename, setSubFilename] = useState(user.sub_filename || '');
   const [loading, setLoading] = useState(true);
@@ -41,6 +48,9 @@ const UserSettingsModal = ({ user, onClose, showToast, onSuccess }) => {
     setSaving(true);
     try {
       await request.put(`${API_BASE}/users/${user.id}`, {
+        ...(expiry === toLocalDateTime(user.expire_time) ? {} : {
+          expire_time: expiry ? Math.floor(new Date(expiry).getTime() / 1000) : 0,
+        }),
         template_id: selectedTemplate,
         sub_name: subName.trim() || '',
         sub_filename: subFilename.trim() || ''
@@ -73,6 +83,15 @@ const UserSettingsModal = ({ user, onClose, showToast, onSuccess }) => {
         </p>
 
         <div className="space-y-4">
+          <label className="block text-sm text-ink-2">
+            到期时间（留空为永不过期）
+            <input
+              type="datetime-local"
+              value={expiry}
+              onChange={(e) => setExpiry(e.target.value)}
+              className="mt-2 w-full px-3 py-2 bg-surface-3 border border-line-strong rounded-lg text-ink"
+            />
+          </label>
           <div>
             <label className="block text-sm text-ink-2 mb-2 flex items-center gap-2">
               <FileCode size={14} />
@@ -272,7 +291,7 @@ const TokenModal = ({ user, onClose, showToast, onSuccess }) => {
   );
 };
 
-const AllocationModal = ({ user, onClose, showToast }) => {
+const AllocationModal = ({ user, onClose, onSuccess, showToast }) => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [sources, setSources] = useState({});
@@ -310,6 +329,7 @@ const AllocationModal = ({ user, onClose, showToast }) => {
         subscriptions: allocations
       });
       showToast('分配已保存', 'success');
+      onSuccess?.();
       onClose();
     } catch (err) {
       showToast('保存失败', 'error');
@@ -544,6 +564,17 @@ export default function Users({
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
 
+  const sourceDistribution = useMemo(() => {
+    const sources = new Map();
+    for (const user of users || []) {
+      for (const source of user.subscription_sources || []) {
+        if (!sources.has(source.id)) sources.set(source.id, { ...source, users: [] });
+        sources.get(source.id).users.push(user.name);
+      }
+    }
+    return [...sources.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+  }, [users]);
+
   const metrics = useMemo(() => {
     const list = users || [];
     const now = Date.now() / 1000;
@@ -590,9 +621,7 @@ export default function Users({
   const formatExpire = (timestamp) => {
     if (!timestamp || timestamp === 0) return '永不过期';
     const date = new Date(timestamp * 1000);
-    const now = new Date();
-    if (date < now) return '已过期';
-    return date.toLocaleDateString('zh-CN');
+    return date.toLocaleString('zh-CN', { dateStyle: 'medium', timeStyle: 'short' });
   };
 
   // Initial fetch in flight: show a skeleton instead of an empty grid flash.
@@ -719,6 +748,22 @@ export default function Users({
         </div>
       </div>
 
+      <details className="rounded-2xl border border-line/60 bg-surface-2/70 p-4">
+        <summary className="cursor-pointer font-medium text-ink">
+          机场分布（{sourceDistribution.length} 个订阅来源）
+        </summary>
+        {sourceDistribution.length ? (
+          <dl className="mt-3 grid gap-3 text-sm md:grid-cols-2">
+            {sourceDistribution.map((source) => (
+              <div key={source.id} className="min-w-0 break-words">
+                <dt className="font-medium text-ink">{source.name}（{source.users.length} 人）</dt>
+                <dd className="text-ink-2">{source.users.join('、')}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : <p className="mt-2 text-sm text-ink-3">暂无用户分配机场订阅。</p>}
+      </details>
+
       {/* Users Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
         {filteredUsers?.length > 0 ? (
@@ -823,13 +868,10 @@ export default function Users({
                     </span>
                   </div>
 
-                  {/* Allocations Info */}
-                  <div className="pt-2 border-t border-line/30 flex items-center justify-between px-1">
-                    <span className="text-ink-3">节点分配</span>
-                    <span className="text-blue-400 font-medium">
-                      {user.allocations && Object.keys(user.allocations).length > 0
-                        ? `${Object.keys(user.allocations).length} 个来源`
-                        : '全部节点'}
+                  <div className="pt-2 border-t border-line/30 flex justify-between gap-3 px-1">
+                    <span className="text-ink-3 shrink-0">机场订阅</span>
+                    <span className="text-blue-400 font-medium text-right break-all">
+                      {(user.subscription_sources || []).map((source) => source.name).join('、') || '未分配'}
                     </span>
                   </div>
                 </div>
@@ -978,6 +1020,7 @@ export default function Users({
         <AllocationModal
           user={editingUser}
           onClose={() => setEditingUser(null)}
+          onSuccess={onRefreshUsers}
           showToast={showToast || ((msg) => alert(msg))}
         />
       )}

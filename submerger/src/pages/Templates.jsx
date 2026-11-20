@@ -161,27 +161,10 @@ export default function Templates({ showToast }) {
     setNewTemplateName(templateNameFromFile);
 
     try {
-      // Call backend API to parse and clean the uploaded file
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('current_template', '');
-
-      const res = await request.post(`${API_BASE}/template/parse`, formData);
-      if (res.data?.content) {
-        setTemplateContent(res.data.content);
-        showToast?.('文件已导入并处理');
-      }
+      setTemplateContent(await file.text());
+      showToast?.('已读取 YAML 文件，请保存以校验模板');
     } catch (err) {
-      // Fallback to raw file content if API fails
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const content = event.target?.result;
-        if (typeof content === 'string') {
-          setTemplateContent(content);
-        }
-      };
-      reader.readAsText(file);
-      showToast?.('文件导入成功（未处理）', 'warning');
+      showToast?.('读取模板失败: ' + err.message, 'error');
     }
 
     if (createFileInputRef.current) {
@@ -389,7 +372,7 @@ export default function Templates({ showToast }) {
                     <span className="font-medium">提示</span>
                   </div>
                   <p className="text-xs text-ink-3">
-                    上传模板后，proxies 和 proxy-groups 的 proxies 列表会被清空，通过可视化编辑器配置。
+                    支持 Clash/Mihomo YAML。导出时使用已分配的节点，保留策略组、规则和提供者设置。
                   </p>
                 </div>
 
